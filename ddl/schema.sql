@@ -1,98 +1,115 @@
 --create table exchange
 CREATE TABLE exchange (
-    exchange_id SERIAL PRIMARY KEY,
-    exchange_code VARCHAR(10) UNIQUE NOT NULL,
-    exchange_name VARCHAR(50) NOT NULL
+    EXCHANGE_ID SERIAL PRIMARY KEY,
+    EXCHANGE_CODE VARCHAR(10) UNIQUE NOT NULL,
+    EXCHANGE_NAME VARCHAR(50) NOT NULL
 );
---Load data for Exchange
-INSERT INTO exchange (exchange_code, exchange_name)
+
+--Load data for exchange
+INSERT INTO exchange (EXCHANGE_CODE, EXCHANGE_NAME)
 VALUES ('NSE', 'National Stock Exchange')
 ON CONFLICT DO NOTHING;
 
+
 --create table instrument
 CREATE TABLE instrument (
-    instrument_id SERIAL PRIMARY KEY,
-    symbol VARCHAR(50) NOT NULL,
-    instrument_type VARCHAR(10) CHECK (instrument_type IN ('FUT','OPT')),
-    underlying VARCHAR(50),
-    exchange_id INT REFERENCES exchange(exchange_id),
-    UNIQUE(symbol, instrument_type, exchange_id)
+    INSTRUMENT_ID SERIAL PRIMARY KEY,
+    SYMBOL VARCHAR(50) NOT NULL,
+    INSTRUMENT_TYPE VARCHAR(10) CHECK (INSTRUMENT_TYPE IN ('FUT','OPT')),
+    UNDERLYING VARCHAR(50),
+    EXCHANGE_ID INT REFERENCES exchange(EXCHANGE_ID),
+    UNIQUE (SYMBOL, INSTRUMENT_TYPE, EXCHANGE_ID)
 );
 
+
 --Load data for Instrument
-INSERT INTO instrument (symbol, instrument_type, underlying, exchange_id)
+INSERT INTO instrument (
+    SYMBOL,
+    INSTRUMENT_TYPE,
+    UNDERLYING,
+    EXCHANGE_ID
+)
 SELECT DISTINCT
-    symbol,
-    CASE WHEN option_typ = 'XX' THEN 'FUT' ELSE 'OPT' END,
-    instrument,
-    e.exchange_id
+    r."SYMBOL",
+    CASE WHEN r."OPTION_TYP" = 'XX' THEN 'FUT' ELSE 'OPT' END,
+    r."INSTRUMENT",
+    e.EXCHANGE_ID
 FROM stg_fo_raw r
-JOIN exchange e ON e.exchange_code = r.exchange
+JOIN exchange e
+  ON e.EXCHANGE_CODE = r."EXCHANGE"
 ON CONFLICT DO NOTHING;
+                       
 
 --create table expiry
 CREATE TABLE expiry (
-    expiry_id SERIAL PRIMARY KEY,
-    expiry_dt DATE NOT NULL,
-    strike_pr NUMERIC(10,2),
-    option_type VARCHAR(2)
+    EXPIRY_ID SERIAL PRIMARY KEY,
+    EXPIRY_DT DATE NOT NULL,
+    STRIKE_PR NUMERIC(10,2),
+    OPTION_TYPE VARCHAR(2)
 );
 
+
 --Load data for Expiry
-INSERT INTO expiry (expiry_dt, strike_pr, option_type)
+INSERT INTO expiry (EXPIRY_DT, STRIKE_PR, OPTION_TYPE)
 SELECT DISTINCT
-    r.expiry_dt,
-    r.strike_pr,
-    NULLIF(r.option_typ, 'XX')
-FROM stg_fo_raw r
-WHERE r.expiry_dt IS NOT NULL
-ON CONFLICT DO NOTHING;
+    COALESCE(
+        "EXPIRY_DT"::date,                         
+        '2026-01-31'::date
+    ),
+    "STRIKE_PR"::numeric(10,2),
+    UPPER("OPTION_TYP")
+FROM stg_fo_raw
+WHERE "EXPIRY_DT" IS NOT NULL
+  AND "STRIKE_PR" IS NOT NULL
+  AND UPPER("OPTION_TYP") IN ('CE', 'PE');
+    
+
 
 --create table trade
 CREATE TABLE trade (
-    trade_id BIGSERIAL PRIMARY KEY,
-    instrument_id INT REFERENCES instrument(instrument_id),
-    expiry_id INT REFERENCES expiry(expiry_id),
-    trade_date DATE,
-    open_pr NUMERIC(10,2),
-    high_pr NUMERIC(10,2),
-    low_pr NUMERIC(10,2),
-    close_pr NUMERIC(10,2),
-    settle_pr NUMERIC(10,2),
-    volume BIGINT,
-    open_int BIGINT,
-    timestamp TIMESTAMP
+    TRADE_ID BIGSERIAL PRIMARY KEY,
+    INSTRUMENT_ID INT REFERENCES instrument(INSTRUMENT_ID),
+    EXPIRY_ID INT REFERENCES expiry(EXPIRY_ID),
+    TRADE_DATE DATE,
+    OPEN_PR NUMERIC(10,2),
+    HIGH_PR NUMERIC(10,2),
+    LOW_PR NUMERIC(10,2),
+    CLOSE_PR NUMERIC(10,2),
+    SETTLE_PR NUMERIC(10,2),
+    VOLUME BIGINT,
+    OPEN_INT BIGINT,
+    TIMESTAMP TIMESTAMP
 );
+
 
 --Load data in trade
 INSERT INTO trade (
-    instrument_id,
-    expiry_id,
-    trade_date,
-    open_pr,
-    high_pr,
-    low_pr,
-    close_pr,
-    settle_pr,
-    volume,
-    open_int,
-    timestamp
+    INSTRUMENT_ID,
+    EXPIRY_ID,
+    TRADE_DATE,
+    OPEN_PR,
+    HIGH_PR,
+    LOW_PR,
+    CLOSE_PR,
+    SETTLE_PR,
+    VOLUME,
+    OPEN_INT,
+    TIMESTAMP
 )
 SELECT
-    i.instrument_id,
-    e.expiry_id,
-    r.timestamp,
-    r.open,
-    r.high,
-    r.low,
-    r.close,
-    r.settle_pr,
-    r.contracts,
-    r.open_int,
-    r.timestamp::timestamp
+    i.INSTRUMENT_ID,
+    e.EXPIRY_ID,
+    r."TIMESTAMP"::timestamp::date,              -- VARCHAR → TIMESTAMP → DATE
+    r."OPEN",
+    r."HIGH",
+    r."LOW",
+    r."CLOSE",
+    r."SETTLE_PR",
+    r."CONTRACTS",
+    r."OPEN_INT",
+    r."TIMESTAMP"::timestamp                     
 FROM stg_fo_raw r
-JOIN instrument i ON i.symbol = r.symbol
-JOIN expiry e
- ON e.expiry_dt = r.expiry_dt
-AND e.strike_pr = r.strike_pr
-AND COALESCE(e.option_type,'XX') = COALESCE(NULLIF(r.option_typ,'XX'),'XX');
+JOIN instrument i ON i.SYMBOL = r."SYMBOL"
+JOIN expiry e ON e.EXPIRY_DT = r."EXPIRY_DT"::timestamp::date  
+           AND e.STRIKE_PR = r."STRIKE_PR"
+           AND COALESCE(e.OPTION_TYPE, 'XX') = COALESCE(NULLIF(r."OPTION_TYP", 'XX'), 'XX');
